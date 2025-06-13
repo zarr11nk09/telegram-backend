@@ -150,14 +150,14 @@ exports.bulkCreate = async (req, res) => {
       }
 
       const lastSeen = user.status.was_online * 1000;
-      if (now - lastSeen < THIRTY_DAYS_MS) {
+      if (now - lastSeen > THIRTY_DAYS_MS) {
         console.log(
-          `[contacts.bulkCreate] Phone ${c.phone} was active in last 30 days`
+          `[contacts.bulkCreate] Phone ${c.phone} was last active more than 30 days ago`
         );
         results.push({
           phone: c.phone,
           status: "skipped",
-          reason: "User active in last 30 days",
+          reason: "User inactive for more than 30 days",
         });
         continue;
       }
