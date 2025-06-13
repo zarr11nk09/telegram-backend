@@ -165,6 +165,7 @@ exports.bulkCreate = async (req, res) => {
 
       // Passed all checks
       validContacts.push({
+        client_id: c.client_id,
         phone: c.phone,
         first_name: c.first_name,
         last_name: c.last_name,
