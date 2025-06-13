@@ -54,230 +54,270 @@ exports.bulkCreate = async (req, res) => {
   const { number, name_prefix, generate, phone, push_token } = req.body;
 
   if (!number || !name_prefix || !generate || !phone) {
-    console.warn("[contacts.bulkCreate] Missing required fields");
-    return res
-      .status(400)
-      .json({ error: "Missing number, name_prefix, generate, or phone" });
+    return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // Generate contacts array
-  const baseNumber = BigInt(number);
-  const contacts = [];
-  for (let i = 0; i < generate; i++) {
-    contacts.push({
-      phone: (baseNumber + BigInt(i)).toString(),
-      first_name: name_prefix,
-      last_name: (i + 1).toString(),
-    });
-  }
-  console.log(`[contacts.bulkCreate] Generated ${contacts.length} contacts`);
-
-  const { call } = createMTProto(phone);
-  const now = Date.now();
-  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-  const results = [];
-  const validContacts = [];
-  let processedCount = 0;
-  let errorCount = 0;
-
-  for (const c of contacts) {
-    processedCount++;
-    try {
-      console.log(
-        `[contacts.bulkCreate] Processing ${processedCount}/${contacts.length} - Phone: ${c.phone}`
-      );
-
-      // Check if user exists
-      const found = await call("contacts.resolvePhone", { phone: c.phone });
-
-      if (!found || !found.users || found.users.length === 0) {
-        console.log(
-          `[contacts.bulkCreate] Phone ${c.phone} is not a Telegram user`
-        );
-        results.push({
-          phone: c.phone,
-          status: "skipped",
-          reason: "Not a Telegram user",
-        });
-        continue;
-      }
-
-      const user = found.users[0];
-
-      // Check if contact already exists in user's contact list
-      const existingContacts = await call("contacts.getContacts", {});
-      const contactExists = existingContacts.users.some(
-        (contact) => contact.id === user.id
-      );
-
-      if (contactExists) {
-        console.log(`[contacts.bulkCreate] Contact ${c.phone} already exists`);
-        results.push({
-          phone: c.phone,
-          status: "skipped",
-          reason: "Contact already exist",
-        });
-        continue;
-      }
-
-      // Check last seen
-      if (!user.status || !user.status.was_online) {
-        console.log(
-          `[contacts.bulkCreate] Phone ${c.phone} has no last seen info`
-        );
-        results.push({
-          phone: c.phone,
-          status: "skipped",
-          reason: "No last seen info",
-        });
-        continue;
-      }
-
-      const lastSeen = user.status.was_online * 1000;
-      if (now - lastSeen < THIRTY_DAYS_MS) {
-        console.log(
-          `[contacts.bulkCreate] Phone ${c.phone} was active in last 30 days`
-        );
-        results.push({
-          phone: c.phone,
-          status: "skipped",
-          reason: "User active in last 30 days",
-        });
-        continue;
-      }
-
-      // Passed all checks
-      validContacts.push({
-        phone: c.phone,
-        first_name: c.first_name,
-        last_name: c.last_name,
-      });
-      results.push({ phone: c.phone, status: "queued" });
-      console.log(`[contacts.bulkCreate] ✓ Phone ${c.phone} queued for import`);
-    } catch (err) {
-      errorCount++;
-      console.error(
-        `[contacts.bulkCreate] Error processing phone ${c.phone}:`,
-        {
-          error_code: err.error_code,
-          error_message: err.error_message,
-          type: err.constructor?.name,
-        }
-      );
-
-      // Use enhanced error handling
-      const errorResult = handleContactError(err, c.phone);
-      results.push(errorResult);
-
-      // Continue processing other contacts instead of stopping
-      console.log(`[contacts.bulkCreate] Continuing with next contact...`);
-    }
-
-    // Add a small delay to avoid rate limiting
-    if (processedCount < contacts.length) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-
-  // Log summary before import
-  console.log(`[contacts.bulkCreate] Processing Summary:`);
-  console.log(`  - Total contacts processed: ${processedCount}`);
-  console.log(`  - Valid contacts for import: ${validContacts.length}`);
-  console.log(`  - Errors encountered: ${errorCount}`);
-  console.log(
-    `  - Skipped contacts: ${
-      results.filter((r) => r.status === "skipped").length
-    }`
-  );
-
-  // Import valid contacts
-  let importResult = null;
-  if (validContacts.length > 0) {
-    try {
-      console.log(
-        `[contacts.bulkCreate] Importing ${validContacts.length} valid contacts`
-      );
-      importResult = await call("contacts.importContacts", {
-        contacts: validContacts,
-      });
-      console.log("[contacts.bulkCreate] Import result:", importResult);
-
-      // Update results for successfully imported contacts
-      if (importResult && importResult.imported) {
-        const importedPhones = importResult.imported.map(
-          (imp) => validContacts[imp.client_id]?.phone
-        );
-        results.forEach((result) => {
-          if (
-            result.status === "queued" &&
-            importedPhones.includes(result.phone)
-          ) {
-            result.status = "imported";
-            delete result.reason;
-          }
-        });
-      }
-    } catch (err) {
-      console.error("[contacts.bulkCreate] Failed to import contacts:", {
-        error_code: err.error_code,
-        error_message: err.error_message,
-        type: err.constructor?.name,
-      });
-
-      // Mark queued contacts as failed
-      results.forEach((result) => {
-        if (result.status === "queued") {
-          result.status = "import_failed";
-          result.reason = err.error_message || "Failed to import contact";
-        }
-      });
-
-      return res.status(500).json({
-        success: false,
-        error: "Failed to import contacts",
-        details: err.error_message || err.message,
-        summary: {
-          total: contacts.length,
-          processed: processedCount,
-          valid: validContacts.length,
-          imported: 0,
-          errors: errorCount,
-        },
-        results,
-      });
-    }
-  } else {
-    console.log("[contacts.bulkCreate] No valid contacts to import");
-  }
-
-  // Final summary
-  const summary = {
-    total: contacts.length,
-    processed: processedCount,
-    valid: validContacts.length,
-    imported: importResult ? importResult.imported?.length || 0 : 0,
-    skipped: results.filter((r) => r.status === "skipped").length,
-    errors: errorCount,
-  };
-
-  console.log(`[contacts.bulkCreate] Final Summary:`, summary);
-
-  if (push_token) {
-    await sendExpoPush(
-      push_token,
-      "Done ✅",
-      "Your contacts generator process has completed."
+  try {
+    const result = await this.bulkCreateWithRetry(
+      phone,
+      number,
+      name_prefix,
+      generate,
+      push_token
     );
-  }
 
-  res.json({
-    success: true,
-    summary,
-    importResult,
-    results,
-  });
+    res.json({ success: true, result });
+  } catch (err) {
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: err.error_code || "Unknown",
+        message: err.error_message,
+      });
+  }
 };
+// exports.bulkCreate = async (req, res) => {
+//   console.log("[contacts.bulkCreate] called with body:", req.body);
+//   const { number, name_prefix, generate, phone, push_token } = req.body;
+
+//   if (!number || !name_prefix || !generate || !phone) {
+//     console.warn("[contacts.bulkCreate] Missing required fields");
+//     return res
+//       .status(400)
+//       .json({ error: "Missing number, name_prefix, generate, or phone" });
+//   }
+
+//   // Generate contacts array
+//   const baseNumber = BigInt(number);
+//   const contacts = [];
+//   for (let i = 0; i < generate; i++) {
+//     contacts.push({
+//       phone: (baseNumber + BigInt(i)).toString(),
+//       first_name: name_prefix,
+//       last_name: (i + 1).toString(),
+//     });
+//   }
+//   console.log(`[contacts.bulkCreate] Generated ${contacts.length} contacts`);
+
+//   const { call, isAuthenticated } = createMTProto(phone);
+//   const now = Date.now();
+//   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+//   // Check if session is authenticated
+//   if (!isAuthenticated) {
+//     console.warn("[contacts.bulkCreate] Session not authenticated");
+//     return res.status(401).json({
+//       error: "AUTH_KEY_UNREGISTERED",
+//       message: "Session not authenticated. Please login again.",
+//       action: "REAUTH_REQUIRED",
+//     });
+//   }
+
+//   console.log("[contacts.bulkCreate] Generating contacts...");
+
+//   const results = [];
+//   const validContacts = [];
+//   let processedCount = 0;
+//   let errorCount = 0;
+
+//   for (const c of contacts) {
+//     processedCount++;
+//     try {
+//       console.log(
+//         `[contacts.bulkCreate] Processing ${processedCount}/${contacts.length} - Phone: ${c.phone}`
+//       );
+
+//       // Check if user exists
+//       const found = await call("contacts.resolvePhone", { phone: c.phone });
+
+//       if (!found || !found.users || found.users.length === 0) {
+//         console.log(
+//           `[contacts.bulkCreate] Phone ${c.phone} is not a Telegram user`
+//         );
+//         results.push({
+//           phone: c.phone,
+//           status: "skipped",
+//           reason: "Not a Telegram user",
+//         });
+//         continue;
+//       }
+
+//       const user = found.users[0];
+
+//       // Check if contact already exists in user's contact list
+//       const existingContacts = await call("contacts.getContacts", {});
+//       const contactExists = existingContacts.users.some(
+//         (contact) => contact.id === user.id
+//       );
+
+//       if (contactExists) {
+//         console.log(`[contacts.bulkCreate] Contact ${c.phone} already exists`);
+//         results.push({
+//           phone: c.phone,
+//           status: "skipped",
+//           reason: "Contact already exist",
+//         });
+//         continue;
+//       }
+
+//       // Check last seen
+//       if (!user.status || !user.status.was_online) {
+//         console.log(
+//           `[contacts.bulkCreate] Phone ${c.phone} has no last seen info`
+//         );
+//         results.push({
+//           phone: c.phone,
+//           status: "skipped",
+//           reason: "No last seen info",
+//         });
+//         continue;
+//       }
+
+//       const lastSeen = user.status.was_online * 1000;
+//       if (now - lastSeen < THIRTY_DAYS_MS) {
+//         console.log(
+//           `[contacts.bulkCreate] Phone ${c.phone} was active in last 30 days`
+//         );
+//         results.push({
+//           phone: c.phone,
+//           status: "skipped",
+//           reason: "User active in last 30 days",
+//         });
+//         continue;
+//       }
+
+//       // Passed all checks
+//       validContacts.push({
+//         phone: c.phone,
+//         first_name: c.first_name,
+//         last_name: c.last_name,
+//       });
+//       results.push({ phone: c.phone, status: "queued" });
+//       console.log(`[contacts.bulkCreate] ✓ Phone ${c.phone} queued for import`);
+//     } catch (err) {
+//       errorCount++;
+//       console.error(
+//         `[contacts.bulkCreate] Error processing phone ${c.phone}:`,
+//         {
+//           error_code: err.error_code,
+//           error_message: err.error_message,
+//           type: err.constructor?.name,
+//         }
+//       );
+
+//       // Use enhanced error handling
+//       const errorResult = handleContactError(err, c.phone);
+//       results.push(errorResult);
+
+//       // Continue processing other contacts instead of stopping
+//       console.log(`[contacts.bulkCreate] Continuing with next contact...`);
+//     }
+
+//     // Add a small delay to avoid rate limiting
+//     if (processedCount < contacts.length) {
+//       await new Promise((resolve) => setTimeout(resolve, 100));
+//     }
+//   }
+
+//   // Log summary before import
+//   console.log(`[contacts.bulkCreate] Processing Summary:`);
+//   console.log(`  - Total contacts processed: ${processedCount}`);
+//   console.log(`  - Valid contacts for import: ${validContacts.length}`);
+//   console.log(`  - Errors encountered: ${errorCount}`);
+//   console.log(
+//     `  - Skipped contacts: ${
+//       results.filter((r) => r.status === "skipped").length
+//     }`
+//   );
+
+//   // Import valid contacts
+//   let importResult = null;
+//   if (validContacts.length > 0) {
+//     try {
+//       console.log(
+//         `[contacts.bulkCreate] Importing ${validContacts.length} valid contacts`
+//       );
+//       importResult = await call("contacts.importContacts", {
+//         contacts: validContacts,
+//       });
+//       console.log("[contacts.bulkCreate] Import result:", importResult);
+
+//       // Update results for successfully imported contacts
+//       if (importResult && importResult.imported) {
+//         const importedPhones = importResult.imported.map(
+//           (imp) => validContacts[imp.client_id]?.phone
+//         );
+//         results.forEach((result) => {
+//           if (
+//             result.status === "queued" &&
+//             importedPhones.includes(result.phone)
+//           ) {
+//             result.status = "imported";
+//             delete result.reason;
+//           }
+//         });
+//       }
+//     } catch (err) {
+//       console.error("[contacts.bulkCreate] Failed to import contacts:", {
+//         error_code: err.error_code,
+//         error_message: err.error_message,
+//         type: err.constructor?.name,
+//       });
+
+//       // Mark queued contacts as failed
+//       results.forEach((result) => {
+//         if (result.status === "queued") {
+//           result.status = "import_failed";
+//           result.reason = err.error_message || "Failed to import contact";
+//         }
+//       });
+
+//       return res.status(500).json({
+//         success: false,
+//         error: "Failed to import contacts",
+//         details: err.error_message || err.message,
+//         summary: {
+//           total: contacts.length,
+//           processed: processedCount,
+//           valid: validContacts.length,
+//           imported: 0,
+//           errors: errorCount,
+//         },
+//         results,
+//       });
+//     }
+//   } else {
+//     console.log("[contacts.bulkCreate] No valid contacts to import");
+//   }
+
+//   // Final summary
+//   const summary = {
+//     total: contacts.length,
+//     processed: processedCount,
+//     valid: validContacts.length,
+//     imported: importResult ? importResult.imported?.length || 0 : 0,
+//     skipped: results.filter((r) => r.status === "skipped").length,
+//     errors: errorCount,
+//   };
+
+//   console.log(`[contacts.bulkCreate] Final Summary:`, summary);
+
+//   if (push_token) {
+//     await sendExpoPush(
+//       push_token,
+//       "Done ✅",
+//       "Your contacts generator process has completed."
+//     );
+//   }
+
+//   res.json({
+//     success: true,
+//     summary,
+//     importResult,
+//     results,
+//   });
+// };
 
 // Check if phone numbers are registered on Telegram (without importing)
 exports.checkPhones = async (req, res) => {
@@ -501,6 +541,88 @@ exports.getContactsWithRetry = async (call, phone, maxRetries = 2) => {
         continue;
       }
 
+      throw error;
+    }
+  }
+};
+
+exports.bulkCreateWithRetry = async (
+  phone,
+  number,
+  name_prefix,
+  generate,
+  push_token,
+  maxRetries = 2
+) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(
+      `[contacts.bulkCreateWithRetry] Attempt ${attempt}/${maxRetries}`
+    );
+
+    try {
+      // Prepare MTProto first
+      let { call, isAuthenticated, logIn } = createMTProto(phone);
+
+      if (!isAuthenticated) {
+        console.log(
+          "[contacts.bulkCreateWithRetry] Session not authenticated. Attempting to authenticate."
+        );
+        await logIn({ phone });
+        // Re-create to refresh `call`
+        ({ call } = createMTProto(phone));
+      }
+
+      // Prepare contacts first
+      const baseNumber = BigInt(number);
+      const contacts = [];
+
+      for (let i = 0; i < generate; i++) {
+        contacts.push({
+          phone: (baseNumber + BigInt(i)).toString(),
+          first_name: name_prefix,
+          last_name: (i + 1).toString(),
+        });
+      }
+      console.log(
+        `[contacts.bulkCreateWithRetry] Prepared ${contacts.length} contacts`
+      );
+
+      // Import directly
+      const { imported } = await call("contacts.importContacts", { contacts });
+
+      console.log("[contacts.bulkCreateWithRetry] Import successful.");
+
+      // Push notification afterwards if required
+      if (push_token) {
+        await sendExpoPush(
+          push_token,
+          "Done ✅",
+          "Your contacts have been successfully imported."
+        );
+      }
+
+      return { success: true, imported };
+    } catch (error) {
+      console.error(
+        `[contacts.bulkCreateWithRetry] Attempt ${attempt} failed:`,
+        { code: error.error_code, message: error.error_message }
+      );
+
+      if (
+        error.error_message === "AUTH_KEY_UNREGISTERED" &&
+        attempt < maxRetries
+      ) {
+        console.log(
+          "[contacts.bulkCreateWithRetry] AUTH_KEY_UNREGISTERED, attempting to refresh."
+        );
+
+        // Here you might implement a refresh:
+        // e.g. refresh phone's MTProto session
+        await refreshMTProtoSession(phone);
+        continue;
+      }
+
+      // If we exhausted attempts or it's another error, throw it
       throw error;
     }
   }
