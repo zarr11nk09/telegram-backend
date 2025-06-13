@@ -57,7 +57,7 @@ const createMTProto = (phone) => {
 
       try {
         const result = await mtproto.call(method, params);
-        console.log(`[mtproto] ${method} successful:`, result);
+        console.log(`[mtproto] ${method} successful.`);
         return result;
       } catch (error) {
         console.error(`[mtproto] ${method} error:`);
