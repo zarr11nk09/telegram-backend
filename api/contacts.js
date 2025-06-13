@@ -65,6 +65,7 @@ exports.bulkCreate = async (req, res) => {
   const contacts = [];
   for (let i = 0; i < generate; i++) {
     contacts.push({
+      client_id: i,
       phone: (baseNumber + BigInt(i)).toString(),
       first_name: name_prefix,
       last_name: (i + 1).toString(),
