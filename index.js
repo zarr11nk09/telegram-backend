@@ -37,6 +37,7 @@ app.post("/auth/send-code", auth.login);
 app.post("/auth/verify", auth.verify);
 app.post("/auth/resend-code", auth.resendCode);
 app.get("/contacts", contacts.get);
+app.post("/contacts/import", contacts.import);
 app.post("/contacts/bulk", contacts.bulkCreate);
 app.post("/contacts/check", contacts.checkPhones);
 
