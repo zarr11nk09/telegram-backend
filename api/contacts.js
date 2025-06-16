@@ -182,13 +182,11 @@ exports.bulkCreate = async (req, res) => {
   const { call, isAuthenticated } = createMTProto(normalized);
   if (!isAuthenticated) {
     console.warn("[contacts.bulkCreate] Session not authenticated.");
-    return res
-      .status(401)
-      .json({
-        error: "AUTH_KEY_UNREGISTERED",
-        message: "Session not authenticated. Please login again.",
-        action: "REAUTH_REQUIRED",
-      });
+    return res.status(401).json({
+      error: "AUTH_KEY_UNREGISTERED",
+      message: "Session not authenticated. Please login again.",
+      action: "REAUTH_REQUIRED",
+    });
   }
 
   console.log("[contacts.bulkCreate] Generating and adding contacts directly.");
@@ -237,7 +235,7 @@ exports.bulkCreate = async (req, res) => {
         results.push({
           phone: c.phone,
           status: "skipped",
-          reason: "Contact already exists",
+          reason: `Contact already exists with name ${user.first_name} ${user.last_name}.`,
         });
         continue;
       }
@@ -283,7 +281,11 @@ exports.bulkCreate = async (req, res) => {
       console.log(
         `[contacts.bulkCreate] ✓ Contact ${c.phone} successfully added.`
       );
-      results.push({ phone: c.phone, status: "imported" });
+      results.push({
+        phone: c.phone,
+        status: "imported",
+        reason: `Contact added successfully with name ${c.first_name} ${c.last_name}.`,
+      });
     } catch (err) {
       console.error(`[contacts.bulkCreate] Failed to add contact ${c.phone}:`, {
         error_code: err?.error_code,
@@ -312,13 +314,13 @@ exports.bulkCreate = async (req, res) => {
 
   console.log("[contacts.bulkCreate] Summary:", summary);
 
-  // if (push_token) {
-  //   await sendExpoPush(
-  //     push_token,
-  //     "Done ✅",
-  //     "Your contacts addition process has completed."
-  //   );
-  // }
+  if (push_token) {
+    await sendExpoPush(
+      push_token,
+      "Done ✅",
+      "Your contacts addition process has completed."
+    );
+  }
 
   res.json({ success: true, summary, results });
 };
