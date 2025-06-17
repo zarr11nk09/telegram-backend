@@ -1,3 +1,12 @@
+[ExpoRootProject] Using the following versions:
+  - buildTools:  35.0.0
+  - minSdk:      24
+  - compileSdk:  35
+  - targetSdk:   35
+  - ndk:         27.1.12297006
+  - kotlin:      2.0.21
+  - ksp:         2.0.21-1.0.28
+
 App configuration
 App api_id: 22360119
 App api_hash: 79c48b8635ccfe56b0090191fd3b9ea1

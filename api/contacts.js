@@ -232,10 +232,14 @@ exports.bulkCreate = async (req, res) => {
       // Check if contact already exists
       if (existingIDs.has(user.id)) {
         console.log(`[contacts.bulkCreate] Contact ${c.phone} already exists.`);
+        const fullName = `${user.first_name}${
+          user.last_name ? ` ${user.last_name}` : ""
+        }`;
+
         results.push({
           phone: c.phone,
           status: "skipped",
-          reason: `Contact already exists with name ${user.first_name} ${user.last_name}.`,
+          reason: `Contact already exists with name ${fullName}.`,
         });
         continue;
       }
